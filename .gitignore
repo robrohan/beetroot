@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+
+# BPM analysis cache
+.beetroot_cache.json
+
+# Output files
+*.mp3
+*.wav
+*.flac
