@@ -33,6 +33,8 @@ def parse_args() -> argparse.Namespace:
                    help="Output MP3 bitrate (default: 320k)")
     p.add_argument("--max-length", type=float, default=None, metavar="MIN",
                    help="Max song length in minutes; longer songs fade out at this point")
+    p.add_argument("--no-normalize", action="store_true",
+                   help="Skip per-track RMS normalization and final peak normalization")
     p.add_argument("--no-cache", action="store_true",
                    help="Ignore and overwrite the BPM analysis cache")
     p.add_argument("--verbose", "-v", action="store_true",
@@ -82,6 +84,7 @@ def main() -> None:
         crossfade_sec=args.crossfade,
         use_stretch=args.stretch,
         max_length_sec=max_length_sec,
+        normalize=not args.no_normalize,
         verbose=args.verbose,
     )
 

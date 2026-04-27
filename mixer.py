@@ -9,10 +9,19 @@ from pydub import AudioSegment
 from analyzer import TrackInfo
 
 
-def load_segment(track: TrackInfo) -> AudioSegment:
+def normalize_segment(seg: AudioSegment, target_dBFS: float = -20.0) -> AudioSegment:
+    if seg.dBFS == float("-inf"):
+        return seg
+    return seg.apply_gain(target_dBFS - seg.dBFS)
+
+
+def load_segment(track: TrackInfo, normalize: bool = True, target_dBFS: float = -20.0) -> AudioSegment:
     fmt = track.path.suffix.lower().lstrip(".")
     seg = AudioSegment.from_file(str(track.path), format=fmt)
-    return seg.set_frame_rate(44100).set_channels(2).set_sample_width(2)
+    seg = seg.set_frame_rate(44100).set_channels(2).set_sample_width(2)
+    if normalize:
+        seg = normalize_segment(seg, target_dBFS)
+    return seg
 
 
 def find_beat_aligned_cut(
@@ -81,6 +90,8 @@ def build_mix(
     use_stretch: bool = False,
     bpm_ratio_threshold: float = 0.25,
     max_length_sec: float | None = None,
+    normalize: bool = True,
+    normalize_target_dBFS: float = -20.0,
     verbose: bool = False,
 ) -> AudioSegment:
     if not ordered_tracks:
@@ -99,7 +110,7 @@ def build_mix(
         return seg
 
     result = AudioSegment.empty()
-    seg_a = load_segment(ordered_tracks[0])
+    seg_a = load_segment(ordered_tracks[0], normalize=normalize, target_dBFS=normalize_target_dBFS)
     seg_a_start_ms = 0
 
     for i in range(n - 1):
@@ -111,7 +122,7 @@ def build_mix(
         else:
             print(f"  Mixing: {track_a.path.name} -> {track_b.path.name}")
 
-        seg_b = load_segment(track_b)
+        seg_b = load_segment(track_b, normalize=normalize, target_dBFS=normalize_target_dBFS)
 
         # Intended end of A (max_length cap or natural end)
         if max_length_sec and track_a.duration_sec > max_length_sec:
@@ -183,6 +194,11 @@ def build_mix(
         last_end_ms = min(last_end_ms, int(find_beat_nearest(last_track.beat_times, max_length_sec) * 1000))
 
     result = result + seg_a[seg_a_start_ms:last_end_ms]
+
+    if normalize:
+        print("  Normalizing final mix...")
+        result = result.normalize(headroom=0.1)
+
     return result
 
 
