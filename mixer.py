@@ -255,6 +255,9 @@ def build_mix(
                     file=sys.stderr,
                 )
 
+        # actual_cf is how much of B's head was consumed — needed to set the start offset
+        actual_cf = min(len(tail_a), len(head_b))
+
         # Pick transition style (random chooses per-pair)
         style = transition_style if transition_style != "random" else _random.choice(["power", "eq"])
         if verbose:
