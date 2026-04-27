@@ -77,12 +77,65 @@ def numpy_to_audiosegment(y: np.ndarray, sr: int) -> AudioSegment:
     )
 
 
+def _stretch_ramp_mono(y: np.ndarray, sr: int, rate_start: float, rate_end: float) -> np.ndarray:
+    """Phase vocoder with continuously varying rate from rate_start to rate_end.
+
+    Uses a smooth-step curve (ease in/out) so the tempo change is imperceptible
+    at the boundaries and peaks in the middle of the transition window.
+    """
+    n_fft = 2048
+    hop = 512
+
+    D = librosa.stft(y, n_fft=n_fft, hop_length=hop)
+    n_freq, n_in = D.shape
+
+    mean_rate = (rate_start + rate_end) / 2.0
+    n_out = max(2, int(n_in / mean_rate))
+
+    # Smooth-step rate curve: eases in and out — 3t²-2t³
+    u = np.linspace(0.0, 1.0, n_out)
+    smooth_u = u * u * (3.0 - 2.0 * u)
+    rate_at_j = rate_start + (rate_end - rate_start) * smooth_u
+
+    # Input position per output frame: cumsum of local rates, normalised to [0, n_in-1]
+    input_pos = np.cumsum(rate_at_j)
+    input_pos = input_pos / input_pos[-1] * (n_in - 1)
+    input_pos = np.clip(input_pos, 0.0, float(n_in - 1))
+
+    # Phase vocoder — single continuous phase accumulation, no chunk boundaries
+    omega = 2.0 * np.pi * hop * np.arange(n_freq) / n_fft
+    phase = np.angle(D[:, 0]).copy()
+    out_D = np.empty((n_freq, n_out), dtype=complex)
+    out_D[:, 0] = D[:, 0]
+
+    for j in range(1, n_out):
+        pos = input_pos[j]
+        advance = pos - input_pos[j - 1]
+
+        lo = int(pos)
+        hi = min(lo + 1, n_in - 1)
+        frac = pos - lo
+
+        # Instantaneous frequency from input phase difference at the current frame
+        i_src = min(lo, n_in - 2)
+        d_phase = np.angle(D[:, i_src + 1]) - np.angle(D[:, i_src]) - omega
+        d_phase -= 2.0 * np.pi * np.round(d_phase / (2.0 * np.pi))
+        phase += (omega + d_phase) * advance
+
+        mag = (1.0 - frac) * np.abs(D[:, lo]) + frac * np.abs(D[:, hi])
+        out_D[:, j] = mag * np.exp(1j * phase)
+
+    return librosa.istft(out_D, n_fft=n_fft, hop_length=hop, length=int(len(y) / mean_rate))
+
+
 def stretch_tail(seg: AudioSegment, from_bpm: float, to_bpm: float) -> AudioSegment:
-    # librosa rate > 1 = faster, < 1 = slower; invert from/to to get the same semantics
-    rate = to_bpm / from_bpm
+    final_rate = to_bpm / from_bpm
+    if abs(final_rate - 1.0) < 0.01:
+        return seg
     y, sr = audiosegment_to_numpy(seg)
-    stretched_channels = [librosa.effects.time_stretch(y[ch], rate=rate) for ch in range(y.shape[0])]
-    stretched = np.stack(stretched_channels)
+    stretched_channels = [_stretch_ramp_mono(y[ch], sr, 1.0, final_rate) for ch in range(y.shape[0])]
+    min_len = min(len(ch) for ch in stretched_channels)
+    stretched = np.stack([ch[:min_len] for ch in stretched_channels])
     return numpy_to_audiosegment(stretched, sr)
 
 
