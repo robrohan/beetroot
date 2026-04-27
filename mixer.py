@@ -3,8 +3,8 @@ import sys
 import shutil
 from pathlib import Path
 
+import librosa
 import numpy as np
-import pyrubberband as pyrb
 from pydub import AudioSegment
 
 from analyzer import TrackInfo
@@ -78,10 +78,11 @@ def numpy_to_audiosegment(y: np.ndarray, sr: int) -> AudioSegment:
 
 
 def stretch_tail(seg: AudioSegment, from_bpm: float, to_bpm: float) -> AudioSegment:
-    ratio = from_bpm / to_bpm
+    # librosa rate > 1 = faster, < 1 = slower; invert from/to to get the same semantics
+    rate = to_bpm / from_bpm
     y, sr = audiosegment_to_numpy(seg)
-    # pyrubberband time_stretch: ratio > 1 = slower, ratio < 1 = faster
-    stretched = pyrb.time_stretch(y, sr, ratio)
+    stretched_channels = [librosa.effects.time_stretch(y[ch], rate=rate) for ch in range(y.shape[0])]
+    stretched = np.stack(stretched_channels)
     return numpy_to_audiosegment(stretched, sr)
 
 

@@ -31,7 +31,7 @@ beetroot is a command-line auto-DJ that analyzes a folder of music files, detect
 - **Smooth crossfades** — independent fade-out and fade-in with configurable overlap so you always hear both songs during the transition
 - **Max song length cap** — trim long tracks and fade into the next one at a set duration
 - **Per-track RMS normalization** + final peak normalization so every song sits at the same perceived loudness
-- **Optional time-stretch transitions** — tempo-morph between songs at BPM boundaries using [Rubber Band](https://breakfastquay.com/rubberband/)
+- **Optional time-stretch transitions** — tempo-morph between songs at BPM boundaries using [librosa](https://librosa.org/)'s phase vocoder
 - **Analysis cache** — BPM and RMS results are cached per-directory so re-runs are instant
 - **MP3 and FLAC** input, MP3 output
 
@@ -42,7 +42,7 @@ beetroot is a command-line auto-DJ that analyzes a folder of music files, detect
 ### System dependencies
 
 ```bash
-brew install ffmpeg rubberband
+brew install ffmpeg
 ```
 
 ### Python environment (conda recommended)
@@ -77,7 +77,7 @@ python beetroot.py --input <dir> --output <file.mp3> [options]
 | `--transition-style` | `power` | Mixing style: `linear`, `power`, `eq`, or `random` |
 | `--max-length MIN` | off | Cap each song at this many minutes; longer tracks fade out early |
 | `--no-energy-cue` | off | Use fixed time offset for cut points instead of RMS energy detection |
-| `--stretch` | off | Enable tempo-morphing at transitions (requires rubberband) |
+| `--stretch` | off | Enable tempo-morphing at transitions |
 | `--bpm-min BPM` | `70` | Minimum BPM after octave normalization |
 | `--bpm-max BPM` | `175` | Maximum BPM after octave normalization |
 | `--phase RAD` | `0.0` | Phase offset for sine/cosine curve (radians) |
