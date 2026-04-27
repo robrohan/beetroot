@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
                    help="Output MP3 bitrate (default: 320k)")
     p.add_argument("--max-length", type=float, default=None, metavar="MIN",
                    help="Max song length in minutes; longer songs fade out at this point")
+    p.add_argument("--transition-style", default="power",
+                   choices=["linear", "power", "eq", "random"],
+                   help="Crossfade style per transition (default: power). "
+                        "random picks power or eq randomly for each pair.")
+    p.add_argument("--no-energy-cue", action="store_true",
+                   help="Use fixed time offset for cut points instead of RMS energy detection")
     p.add_argument("--no-normalize", action="store_true",
                    help="Skip per-track RMS normalization and final peak normalization")
     p.add_argument("--no-cache", action="store_true",
@@ -51,7 +57,7 @@ def main() -> None:
 
     max_length_sec = args.max_length * 60.0 if args.max_length is not None else None
     length_str = f"{args.max_length}min" if args.max_length else "full"
-    print(f"beetroot | shape={args.shape} | crossfade={args.crossfade}s | stretch={args.stretch} | max-length={length_str}")
+    print(f"beetroot | shape={args.shape} | crossfade={args.crossfade}s | style={args.transition_style} | stretch={args.stretch} | max-length={length_str}")
     print(f"Input:  {args.input}")
     print(f"Output: {args.output}")
 
@@ -85,6 +91,8 @@ def main() -> None:
         use_stretch=args.stretch,
         max_length_sec=max_length_sec,
         normalize=not args.no_normalize,
+        transition_style=args.transition_style,
+        energy_cue=not args.no_energy_cue,
         verbose=args.verbose,
     )
 

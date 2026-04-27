@@ -1,3 +1,4 @@
+import random as _random
 import sys
 import shutil
 from pathlib import Path
@@ -84,6 +85,98 @@ def stretch_tail(seg: AudioSegment, from_bpm: float, to_bpm: float) -> AudioSegm
     return numpy_to_audiosegment(stretched, sr)
 
 
+def _silent_like(duration_ms: int, ref: AudioSegment) -> AudioSegment:
+    return AudioSegment.silent(duration=duration_ms, frame_rate=ref.frame_rate) \
+        .set_channels(ref.channels).set_sample_width(ref.sample_width)
+
+
+def _crossfade_linear(tail_a: AudioSegment, head_b: AudioSegment) -> AudioSegment:
+    """Current behaviour extracted as a named function."""
+    actual_cf = min(len(tail_a), len(head_b))
+    if actual_cf == 0:
+        return head_b
+    overlap_ms = actual_cf // 2
+    tail_a = tail_a[:actual_cf]
+    head_b = head_b[:actual_cf]
+    ta = tail_a.fade_out(actual_cf)
+    hb = head_b.fade_in(actual_cf)
+    solo_a = ta[:actual_cf - overlap_ms]
+    overlap = ta[actual_cf - overlap_ms:].overlay(hb[:overlap_ms])
+    solo_b = hb[overlap_ms:]
+    return solo_a + overlap + solo_b
+
+
+def _crossfade_power(tail_a: AudioSegment, head_b: AudioSegment) -> AudioSegment:
+    """Equal-power (cos/sin) crossfade — maintains constant perceived loudness."""
+    actual_cf = min(len(tail_a), len(head_b))
+    if actual_cf == 0:
+        return head_b
+    overlap_ms = actual_cf // 2
+    tail_a = tail_a[:actual_cf]
+    head_b = head_b[:actual_cf]
+
+    y_a, sr = audiosegment_to_numpy(tail_a)
+    t_a = np.linspace(0.0, np.pi / 2, y_a.shape[1])
+    y_a *= np.cos(t_a)          # amplitude envelope: 1 → 0
+    ta = numpy_to_audiosegment(y_a, sr)
+
+    y_b, sr = audiosegment_to_numpy(head_b)
+    t_b = np.linspace(0.0, np.pi / 2, y_b.shape[1])
+    y_b *= np.sin(t_b)          # amplitude envelope: 0 → 1
+    hb = numpy_to_audiosegment(y_b, sr)
+
+    solo_a = ta[:actual_cf - overlap_ms]
+    overlap = ta[actual_cf - overlap_ms:].overlay(hb[:overlap_ms])
+    solo_b = hb[overlap_ms:]
+    return solo_a + overlap + solo_b
+
+
+def _crossfade_eq(tail_a: AudioSegment, head_b: AudioSegment) -> AudioSegment:
+    """DJ EQ crossfade: treble fades linearly, bass swaps hard at the midpoint."""
+    from pydub.scipy_effects import high_pass_filter, low_pass_filter
+
+    actual_cf = min(len(tail_a), len(head_b))
+    if actual_cf == 0:
+        return head_b
+    mid = actual_cf // 2
+    tail_a = tail_a[:actual_cf]
+    head_b = head_b[:actual_cf]
+
+    BASS_HZ = 300
+
+    a_treble = high_pass_filter(tail_a, BASS_HZ).fade_out(actual_cf)
+    b_treble = high_pass_filter(head_b, BASS_HZ).fade_in(actual_cf)
+
+    # Bass: A plays first half, B plays second half — hard swap at midpoint
+    a_bass = low_pass_filter(tail_a, BASS_HZ)[:mid] + _silent_like(actual_cf - mid, tail_a)
+    b_bass = _silent_like(mid, head_b) + low_pass_filter(head_b, BASS_HZ)[mid:actual_cf]
+
+    return a_treble.overlay(b_treble).overlay(a_bass).overlay(b_bass)
+
+
+def find_energy_cue_point(
+    track: TrackInfo,
+    intended_end_sec: float,
+    crossfade_sec: float,
+) -> float:
+    """Return the lowest-energy beat in the search window near the end of the track."""
+    if len(track.rms_energy) == 0:
+        return max(0.0, intended_end_sec - crossfade_sec)
+
+    frames_per_sec = track.sample_rate / 512.0
+    start_sec = max(0.0, intended_end_sec - crossfade_sec * 2)
+    end_sec = max(0.0, intended_end_sec - crossfade_sec * 0.25)
+
+    start_f = int(start_sec * frames_per_sec)
+    end_f = min(int(end_sec * frames_per_sec), len(track.rms_energy) - 1)
+
+    if start_f >= end_f:
+        return max(0.0, intended_end_sec - crossfade_sec)
+
+    min_sec = (start_f + int(np.argmin(track.rms_energy[start_f:end_f]))) / frames_per_sec
+    return find_beat_nearest(track.beat_times, min_sec)
+
+
 def build_mix(
     ordered_tracks: list[TrackInfo],
     crossfade_sec: float = 30.0,
@@ -92,6 +185,8 @@ def build_mix(
     max_length_sec: float | None = None,
     normalize: bool = True,
     normalize_target_dBFS: float = -20.0,
+    transition_style: str = "power",
+    energy_cue: bool = True,
     verbose: bool = False,
 ) -> AudioSegment:
     if not ordered_tracks:
@@ -131,9 +226,11 @@ def build_mix(
             intended_end_sec = track_a.duration_sec
         intended_end_ms = min(int(intended_end_sec * 1000), len(seg_a))
 
-        # Cut A exactly crossfade_sec before its intended end, snapped to nearest beat
-        cut_target_sec = max(0.0, intended_end_sec - crossfade_sec)
-        cut_sec = find_beat_nearest(track_a.beat_times, cut_target_sec)
+        # Find cut point: energy-based (natural quiet moment) or fixed offset
+        if energy_cue:
+            cut_sec = find_energy_cue_point(track_a, intended_end_sec, crossfade_sec)
+        else:
+            cut_sec = find_beat_nearest(track_a.beat_times, max(0.0, intended_end_sec - crossfade_sec))
         cut_ms = int(cut_sec * 1000)
 
         # Entry into B (first detected beat, skips any silent intro)
@@ -158,25 +255,17 @@ def build_mix(
                     file=sys.stderr,
                 )
 
-        # A fades out over its full tail, B fades in over its full head.
-        # They overlap by half the crossfade duration so both are audible throughout.
-        actual_cf = min(len(tail_a), len(head_b))
-        overlap_ms = actual_cf // 2
+        # Pick transition style (random chooses per-pair)
+        style = transition_style if transition_style != "random" else _random.choice(["power", "eq"])
+        if verbose:
+            print(f"    transition style: {style}")
 
-        if actual_cf > 0:
-            tail_a_faded = tail_a.fade_out(actual_cf)
-            head_b_faded = head_b.fade_in(actual_cf)
-
-            # Split into: [A solo fade] [A+B overlap] [B solo fade]
-            solo_a = tail_a_faded[: actual_cf - overlap_ms]
-            a_in_overlap = tail_a_faded[actual_cf - overlap_ms :]
-            b_in_overlap = head_b_faded[:overlap_ms]
-            solo_b = head_b_faded[overlap_ms:]
-
-            overlap_zone = a_in_overlap.overlay(b_in_overlap)
-            transition = solo_a + overlap_zone + solo_b
+        if style == "power":
+            transition = _crossfade_power(tail_a, head_b)
+        elif style == "eq":
+            transition = _crossfade_eq(tail_a, head_b)
         else:
-            transition = head_b
+            transition = _crossfade_linear(tail_a, head_b)
 
         result = result + body_a + transition
 

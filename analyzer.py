@@ -15,6 +15,7 @@ class TrackInfo:
     beat_times: np.ndarray
     duration_sec: float
     sample_rate: int = 44100
+    rms_energy: np.ndarray = field(default_factory=lambda: np.array([]))
 
     def to_dict(self) -> dict:
         return {
@@ -23,6 +24,7 @@ class TrackInfo:
             "beat_times": self.beat_times.tolist(),
             "duration_sec": self.duration_sec,
             "sample_rate": self.sample_rate,
+            "rms_energy": [round(float(v), 6) for v in self.rms_energy],
         }
 
     @classmethod
@@ -33,6 +35,7 @@ class TrackInfo:
             beat_times=np.array(d["beat_times"]),
             duration_sec=d["duration_sec"],
             sample_rate=d.get("sample_rate", 44100),
+            rms_energy=np.array(d.get("rms_energy", [])),
         )
 
 
@@ -114,6 +117,7 @@ def analyze_track(
 
     raw_bpm, beat_times = _best_beat_track(y, sr)
     bpm = _normalize_bpm(raw_bpm, bpm_min, bpm_max)
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
 
     if verbose and abs(raw_bpm - bpm) > 1.0:
         print(f"    BPM normalized: {raw_bpm:.1f} -> {bpm:.1f}")
@@ -124,6 +128,7 @@ def analyze_track(
         beat_times=beat_times,
         duration_sec=duration,
         sample_rate=sr,
+        rms_energy=rms,
     )
 
 
